@@ -1,6 +1,7 @@
 import json
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -9,6 +10,7 @@ from urllib.request import Request, urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 from catzoom.jev import parse_answer
+from catzoom.cli import _upsert_record
 from catzoom.server import Workbench, defaults, make_server, score, validate_configs
 
 
@@ -97,6 +99,86 @@ class WorkbenchTests(unittest.TestCase):
         self.assertEqual(len(bounded.records), 100)
         self.assertIn('rent:104', bounded.records)
         self.assertNotIn('rent:0', bounded.records)
+
+    def test_new_records_from_another_process_appear_in_snapshot(self):
+        row = {'listing': {'id': 'new', 'transaction': 'rent', 'collected_at': '2027-01-01T00:00:00Z',
+                           'title': 'New apartment', 'description': 'New description'}, 'jev': None}
+        _upsert_record(self.path / 'listings.jsonl', row)
+        self.assertEqual(self.workbench.snapshot()['listings'][0]['id'], 'rent:new')
+        self.assertEqual(len(self.workbench.snapshot()['listings']), 13)
+
+    def test_crawl_exposes_first_listing_before_second_finishes(self):
+        first_saved = threading.Event()
+        release_second = threading.Event()
+
+        class FakeCollector:
+            def __init__(self, delay):
+                self.delay = delay
+
+            def collect(self, transaction, pages, limit, location, skip_ids):
+                assert transaction == 'rent' and location == 'bucuresti-sector-6'
+                assert '11' not in skip_ids  # Fixture records do not claim a detail page.
+                yield {'id': 'live-1', 'transaction': transaction, 'collected_at': '2027-01-01T00:00:00Z',
+                       'title': 'First live listing', 'description': 'Balcony'}
+                first_saved.set()
+                if not release_second.wait(2):
+                    raise RuntimeError('Test collector timed out')
+                yield {'id': 'live-2', 'transaction': transaction, 'collected_at': '2027-01-02T00:00:00Z',
+                       'title': 'Second live listing', 'description': 'Cats allowed'}
+
+        self.workbench.collector_factory = FakeCollector
+        started = self.workbench.start_crawl({'transaction': 'rent', 'location': 'bucuresti-sector-6', 'pages': 1, 'limit': 2})
+        self.assertTrue(started['crawl']['running'])
+        self.assertTrue(first_saved.wait(2))
+        try:
+            # The first write may still be completing when the collector resumes.
+            for _ in range(100):
+                interim = self.workbench.snapshot()
+                if interim['crawl']['processed']:
+                    break
+                time.sleep(.01)
+            self.assertTrue(interim['crawl']['running'])
+            self.assertEqual(interim['crawl']['processed'], 1)
+            self.assertEqual(interim['listings'][0]['id'], 'rent:live-1')
+            with self.assertRaises(ValueError):
+                self.workbench.start_crawl({'transaction': 'rent', 'location': 'romania', 'pages': 1, 'limit': 1})
+        finally:
+            release_second.set()
+        for _ in range(100):
+            finished = self.workbench.snapshot()
+            if not finished['crawl']['running']:
+                break
+            time.sleep(.01)
+        self.assertFalse(finished['crawl']['running'])
+        self.assertEqual(finished['crawl']['processed'], 2)
+        self.assertEqual(finished['listings'][0]['id'], 'rent:live-2')
+        self.assertEqual(len(self.calls), 0)  # Crawl only collects; visible-page logic controls Jev spend.
+
+    def test_snapshot_does_not_wait_for_jev_network(self):
+        entered = threading.Event()
+        release = threading.Event()
+        original = self.workbench.evaluator
+
+        def slow_evaluator(*args):
+            entered.set()
+            if not release.wait(2):
+                raise RuntimeError('Test evaluator timed out')
+            return original(*args)
+
+        self.workbench.evaluator = slow_evaluator
+        thread = threading.Thread(target=lambda: self.workbench.classify(['rent:11']), daemon=True)
+        thread.start()
+        self.assertTrue(entered.wait(2))
+        try:
+            interim = self.workbench.snapshot()
+            self.assertEqual(interim['classifying'], ['rent:11'])
+            _upsert_record(self.path / 'listings.jsonl', {'listing': {'id': 'mid-jev', 'transaction': 'rent',
+                           'collected_at': '2027-01-01T00:00:00Z', 'title': 'While classifying'}, 'jev': None})
+            self.assertEqual(self.workbench.snapshot()['listings'][0]['id'], 'rent:mid-jev')
+        finally:
+            release.set()
+            thread.join(2)
+        self.assertFalse(thread.is_alive())
 
     def test_ordered_score_question_and_weighted_result(self):
         config = validate_configs([{'name': 'Sunlight', 'kind': 'score', 'question': 'How strongly does the text support natural light?',

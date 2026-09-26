@@ -409,3 +409,24 @@ dialog h2 {
         grid-template-columns: repeat(3, 1fr)
     }
 }
+
+.crawlbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    background: #e4f0e6;
+    border: 1px solid #b9d4c1;
+    border-radius: 14px
+}
+
+.crawlbar .controls { gap: .45rem }
+.crawlbar label { font-size: .8rem; display: flex; align-items: center; gap: .3rem }
+.crawlbar input { width: 60px }
+.crawlbar select { max-width: 170px }
+#startCrawl { background: #245f45; color: white; border-color: #245f45 }
+#crawlStatus { font-size: .8rem; color: #41694e }
+

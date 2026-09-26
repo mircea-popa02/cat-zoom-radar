@@ -12,8 +12,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .cli import _read_records
+from .cli import _read_records, _upsert_record
 from .jev import QUESTIONS, evaluate_questions, payload
+from .storia import LOCATIONS, Collector
 
 PAGE_SIZE = 9
 MAX_POOL = 100
@@ -129,15 +130,20 @@ def score(record, configs, results):
 
 
 class Workbench:
-    def __init__(self, output, api_key=None, evaluator=evaluate_questions):
+    def __init__(self, output, api_key=None, evaluator=evaluate_questions, collector_factory=Collector):
         self.output = Path(output)
         self.output.mkdir(parents=True, exist_ok=True)
         self.api_key = api_key
         self.evaluator = evaluator
-        self.lock = threading.Lock()
-        records = list(_read_records(self.output / "listings.jsonl").values())
-        records.sort(key=lambda r: r["listing"].get("collected_at") or "", reverse=True)
-        self.records = {self.record_id(r): r for r in records[:MAX_POOL]}
+        self.collector_factory = collector_factory
+        self.lock = threading.RLock()
+        self.records_path = self.output / "listings.jsonl"
+        self.records = {}
+        self.records_mtime = None
+        self._reload_records(force=True)
+        self.inflight = set()
+        self.crawl = {"running": False, "processed": 0, "error": None, "area": None}
+        self.stop_event = threading.Event()
         self.config_path = self.output / "classifiers.json"
         self.cache_path = self.output / "classifications.json"
         if self.config_path.exists():
@@ -157,6 +163,15 @@ class Workbench:
         tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(path)
 
+    def _reload_records(self, force=False):
+        stamp = self.records_path.stat().st_mtime_ns if self.records_path.exists() else None
+        if not force and stamp == self.records_mtime:
+            return
+        records = list(_read_records(self.records_path).values())
+        records.sort(key=lambda r: r["listing"].get("collected_at") or "", reverse=True)
+        self.records = {self.record_id(r): r for r in records[:MAX_POOL]}
+        self.records_mtime = stamp
+
     def result_for(self, record_id, config):
         record = self.records[record_id]
         signature = digest(question_for(config))
@@ -172,14 +187,17 @@ class Workbench:
         return None
 
     def snapshot(self):
-        listings = []
-        for ident, record in self.records.items():
-            results = {c["id"]: self.result_for(ident, c) for c in self.configs}
-            results = {k: v for k, v in results.items() if v is not None}
-            listings.append({"id": ident, "listing": record["listing"], "results": results,
-                             "score": score(record, self.configs, results)})
-        return {"listings": listings, "classifiers": deepcopy(self.configs), "page_size": PAGE_SIZE,
-                "max_pool": MAX_POOL, "has_key": bool(self.api_key), "presets": defaults()}
+        with self.lock:
+            self._reload_records()
+            listings = []
+            for ident, record in self.records.items():
+                results = {c["id"]: self.result_for(ident, c) for c in self.configs}
+                results = {k: v for k, v in results.items() if v is not None}
+                listings.append({"id": ident, "listing": record["listing"], "results": results,
+                                 "score": score(record, self.configs, results)})
+            return {"listings": listings, "classifiers": deepcopy(self.configs), "page_size": PAGE_SIZE,
+                    "max_pool": MAX_POOL, "has_key": bool(self.api_key), "presets": defaults(), "crawl": dict(self.crawl),
+                    "classifying": sorted({ident for ident, _ in self.inflight})}
 
     def configure(self, items):
         with self.lock:
@@ -192,25 +210,83 @@ class Workbench:
             raise RuntimeError("JEV_API_KEY is not set in the server process")
         if not isinstance(ids, list) or not 1 <= len(ids) <= PAGE_SIZE or len(ids) != len(set(ids)):
             raise ValueError(f"Select 1–{PAGE_SIZE} distinct listings from the current pool")
-        if any(ident not in self.records for ident in ids):
-            raise ValueError("Listing is outside the current 100-listing pool")
         if not self.configs:
             raise ValueError("Add a classifier first")
         updated = 0
         with self.lock:
-            for ident in ids:
+            self._reload_records()
+            if any(ident not in self.records for ident in ids):
+                raise ValueError("Listing is outside the current 100-listing pool")
+        for ident in ids:
+            with self.lock:
+                self._reload_records()
+                if ident not in self.records:
+                    continue  # A newer listing moved this one outside the bounded pool.
                 record = self.records[ident]
-                pending = {c["id"]: question_for(c) for c in self.configs if self.result_for(ident, c) is None}
+                pending = {c["id"]: question_for(c) for c in self.configs
+                           if self.result_for(ident, c) is None and (ident, c["id"]) not in self.inflight}
                 if not pending:
                     continue
-                response = self.evaluator(record["listing"], self.api_key, pending, model)
-                cache = self.cache.setdefault(ident, {})
-                listing_hash = digest(payload(record["listing"])["state"])
-                for key, answer in response["signals"].items():
-                    cache[key] = {"signature": digest(pending[key]), "listing_hash": listing_hash, "result": answer}
-                self._write(self.cache_path, self.cache)
-                updated += 1
-            return {"classified": updated, "state": self.snapshot()}
+                self.inflight.update((ident, key) for key in pending)
+                listing = deepcopy(record["listing"])
+                listing_hash = digest(payload(listing)["state"])
+            try:
+                response = self.evaluator(listing, self.api_key, pending, model)
+            except Exception:
+                with self.lock:
+                    self.inflight.difference_update((ident, key) for key in pending)
+                raise
+            with self.lock:
+                try:
+                    cache = self.cache.setdefault(ident, {})
+                    for key, answer in response["signals"].items():
+                        cache[key] = {"signature": digest(pending[key]), "listing_hash": listing_hash, "result": answer}
+                    self._write(self.cache_path, self.cache)
+                    updated += 1
+                finally:
+                    self.inflight.difference_update((ident, key) for key in pending)
+        return {"classified": updated, "state": self.snapshot()}
+
+    def start_crawl(self, params):
+        transaction, location = params.get("transaction"), params.get("location")
+        pages, limit = params.get("pages"), params.get("limit")
+        if transaction not in ("rent", "sale") or location not in LOCATIONS:
+            raise ValueError("Choose a supported transaction and area")
+        if isinstance(pages, bool) or not isinstance(pages, int) or not 1 <= pages <= 3:
+            raise ValueError("Pages must be 1–3")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 30:
+            raise ValueError("Limit must be 1–30")
+        with self.lock:
+            if self.crawl["running"]:
+                raise ValueError("A crawl is already running")
+            self.stop_event.clear()
+            self.crawl = {"running": True, "processed": 0, "error": None, "area": location}
+            thread = threading.Thread(target=self._crawl_worker, args=(transaction, location, pages, limit), daemon=True)
+            thread.start()
+            return self.snapshot()
+
+    def stop_crawl(self):
+        self.stop_event.set()
+        return self.snapshot()
+
+    def _crawl_worker(self, transaction, location, pages, limit):
+        try:
+            records = _read_records(self.records_path)
+            skip_ids = {key[1] for key, record in records.items() if key[0] == transaction and record["listing"].get("detail_found")}
+            collector = self.collector_factory(3.0)
+            for listing in collector.collect(transaction, pages, limit, location, skip_ids):
+                if self.stop_event.is_set():
+                    break
+                _upsert_record(self.records_path, {"listing": listing, "jev": None})
+                with self.lock:
+                    self.crawl["processed"] += 1
+                    self._reload_records(force=True)
+        except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
+            with self.lock:
+                self.crawl["error"] = str(exc)
+        finally:
+            with self.lock:
+                self.crawl["running"] = False
 
 
 class AppHandler(BaseHTTPRequestHandler):
@@ -266,6 +342,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not isinstance(model, str) or not re.fullmatch(r"jev-[a-zA-Z0-9.-]{1,40}", model):
                     raise ValueError("Invalid Jev model name")
                 result = self.workbench.classify(data.get("ids"), model)
+            elif path == "/api/crawl":
+                result = self.workbench.start_crawl(data)
+            elif path == "/api/crawl/stop":
+                result = self.workbench.stop_crawl()
             else:
                 self._send(404, {"error": "Not found"})
                 return

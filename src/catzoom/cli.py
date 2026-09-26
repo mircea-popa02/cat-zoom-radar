@@ -1,7 +1,9 @@
 import argparse
+import fcntl
 import json
 import os
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -23,12 +25,32 @@ def _read_records(path):
 
 
 def _save_records(path, records):
-    # Replace only after the complete crawl has produced valid records.
+    # Atomic replacement lets the live UI read without seeing a partial JSONL.
     with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
         for record in records.values():
             tmp.write(json.dumps(record, ensure_ascii=False) + "\n")
         tmp_path = Path(tmp.name)
     tmp_path.replace(path)
+
+
+@contextmanager
+def _record_lock(path):
+    lock_path = path.with_suffix(".lock")
+    with lock_path.open("a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _upsert_record(path, record):
+    with _record_lock(path):
+        records = _read_records(path)
+        listing = record["listing"]
+        records[(listing["transaction"], str(listing["id"]))] = record
+        _save_records(path, records)
+        return len(records)
 
 
 def main(argv=None):
@@ -70,7 +92,10 @@ def main(argv=None):
         if args.import_jsonl:
             records.update(_read_records(args.import_jsonl))
         if args.render_only or args.import_jsonl:
-            _save_records(output_file, records)
+            if args.import_jsonl:
+                for record in _read_records(args.import_jsonl).values():
+                    _upsert_record(output_file, record)
+            records = _read_records(output_file)
             (args.output / "index.html").write_text(render(list(records.values())))
             print(f"Rendered {len(records)} saved listings in {args.output.resolve()}")
             return 0
@@ -87,15 +112,16 @@ def main(argv=None):
             if new_count >= args.limit:
                 break
             record = {"listing": listing, "jev": None}
+            _upsert_record(output_file, record)
             if args.classify_on_crawl:
                 try:
                     record["jev"] = evaluate(listing, key, args.model)
                 except (RuntimeError, ValueError) as exc:
                     record["jev_error"] = str(exc)
-            records[(listing["transaction"], listing["id"])] = record
+                _upsert_record(output_file, record)
             new_count += 1
             print(f"[{new_count}] {listing['title']} — {'classified' if record['jev'] else 'unclassified'}")
-        _save_records(output_file, records)
+        records = _read_records(output_file)
         (args.output / "index.html").write_text(render(list(records.values())))
         print(f"Processed {new_count} new listings; {len(records)} total in {args.output.resolve()}")
         return 0

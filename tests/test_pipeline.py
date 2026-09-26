@@ -99,6 +99,26 @@ class PipelineTests(unittest.TestCase):
             with patch.dict("os.environ", {"JEV_API_KEY": ""}):
                 self.assertEqual(main(["--fixture", str(ROOT / "fixtures/search.json"), "--detail-fixture", str(ROOT / "fixtures/detail.json"), "--refresh", "--output", tmp]), 0)
 
+    def test_cli_saves_each_listing_before_collector_finishes(self):
+        from tempfile import TemporaryDirectory
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'listings.jsonl'
+
+            class InterruptedCollector:
+                def __init__(self, *args):
+                    pass
+
+                def collect(self, *args):
+                    yield {'id': 'first', 'transaction': 'rent', 'title': 'Saved immediately',
+                           'description': 'Complete detail', 'detail_found': True}
+                    assert path.exists()
+                    assert len(path.read_text().splitlines()) == 1
+                    raise RuntimeError('Search interrupted')
+
+            with patch('catzoom.cli.Collector', InterruptedCollector), patch.dict('os.environ', {'JEV_API_KEY': ''}):
+                self.assertEqual(main(['--output', tmp]), 1)
+            self.assertEqual(json.loads(path.read_text().splitlines()[0])['listing']['id'], 'first')
+
 
 if __name__ == "__main__":
     unittest.main()

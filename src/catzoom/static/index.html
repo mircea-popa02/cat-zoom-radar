@@ -19,14 +19,25 @@
         </div>
     </header>
     <main class="shell">
+        <section class="crawlbar" aria-label="Live crawl">
+            <div class="controls">
+                <strong>Live crawl</strong>
+                <select id="crawlTransaction" aria-label="Transaction"><option value="rent">Rent</option><option value="sale">Sale</option></select>
+                <select id="crawlLocation" aria-label="Area"><option value="romania">All Romania</option><option value="bucuresti">București</option><option value="bucuresti-sector-6">București · Sector 6</option><option value="cluj-napoca">Cluj-Napoca</option></select>
+                <label>Pages <input id="crawlPages" type="number" min="1" max="3" value="1"></label>
+                <label>New listings <input id="crawlLimit" type="number" min="1" max="30" value="10"></label>
+                <button id="startCrawl" type="button">Start crawl</button>
+                <button id="stopCrawl" type="button" hidden>Stop after current request</button>
+            </div>
+            <span id="crawlStatus" role="status"></span>
+        </section>
         <section class="toolbar" aria-label="Listing controls">
             <div class="controls"><input id="search" type="search" placeholder="Search title, city, description"
                     aria-label="Search listings"><select id="sort" aria-label="Sort listings">
                     <option value="newest">Newest first</option>
                     <option value="score">Highest score</option>
                 </select><button id="settings" type="button">⚙ Classifiers & weights</button></div>
-            <div class="controls"><label class="toggle"><input id="auto" type="checkbox"> Classify as I open
-                    pages</label><button id="classify" type="button">Classify this page</button></div>
+            <div class="controls"><label class="toggle"><input id="auto" type="checkbox" checked> Classify visible page as it appears</label><button id="classify" type="button">Classify this page</button></div>
         </section>
         <p id="notice" role="status" aria-live="polite"></p>
         <div class="summary"><span id="count"></span><span id="pool"></span></div>
@@ -70,8 +81,7 @@
                     lines, one ordered level per line. Higher levels earn more weighted points.</small></label></div>
         <div class="dialog-actions"><button id="addRule" type="button">Add classifier</button><span id="editorNotice"
                 role="status"></span></div>
-        <p class="small">At most 12 active classifiers. Only the current page (up to 9 listings) is sent for
-            classification when requested.</p>
+        <p class="small">At most 12 active classifiers. Adding a classifier evaluates the current page (up to 9 listings) and clears this form. Other pages evaluate when opened if the automatic setting is on.</p>
     </dialog>
     <footer>Advertiser claims and Jev decisions need human verification. This workbench binds to 127.0.0.1 only.
     </footer>
