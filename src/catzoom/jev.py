@@ -15,13 +15,16 @@ QUESTIONS = {
     "balcony": {"type": "choice", "instructions": "Does the text explicitly describe outdoor space? Do not infer cat safety from a balcony.",
                 "criteria": {"private": "Private balcony, terrace or garden stated", "shared": "Only common or shared outdoor space stated", "none": "Explicitly no outdoor space", "unspecified": "Not clear or not mentioned"}},
     "fine_print": {"type": "noul", "instructions": "Does the listing explicitly contain a rental restriction or extra cost that a renter should check, such as commission, deposit, minimum term, no pets, or additional utility charges?"},
+    "agency_fee": {"type": "noul", "instructions": "Does the text explicitly state an agency commission or brokerage fee payable by the renter?"},
+    "parking_included": {"type": "noul", "instructions": "Does the text explicitly state a parking place is included in the listed price, rather than merely available?"},
+    "utilities_extra": {"type": "noul", "instructions": "Does the text explicitly state utilities, maintenance, or another recurring cost are charged on top of the listed price?"},
 }
 
 
 def payload(listing, model="jev-latest"):
     # No seller contact data, images, exact street or coordinates leave the machine.
-    state = {k: listing.get(k) for k in ("title", "description", "features", "floor", "rooms", "area_sqm", "transaction")}
-    state["description"] = (state.get("description") or "")[:6000]
+    state = {k: listing.get(k) for k in ("title", "description", "features", "amenities", "building", "floor", "rooms", "area_sqm", "transaction", "price")}
+    state["description"] = (state.get("description") or "")[:12000]
     return {"model": model, "state": state, "questions": QUESTIONS}
 
 

@@ -3,21 +3,48 @@ import json
 import os
 import sys
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .jev import evaluate
 from .report import render
-from .storia import Collector, detail_ad, next_data, normalize, summaries
+from .storia import LOCATIONS, Collector, detail_ad, normalize, summaries
+
+
+def _read_records(path):
+    if not path.exists():
+        return {}
+    records = {}
+    for line in path.read_text().splitlines():
+        if line.strip():
+            record = json.loads(line)
+            listing = record["listing"]
+            records[(listing["transaction"], str(listing["id"]))] = record
+    return records
+
+
+def _save_records(path, records):
+    # Replace only after the complete crawl has produced valid records.
+    with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
+        for record in records.values():
+            tmp.write(json.dumps(record, ensure_ascii=False) + "\n")
+        tmp_path = Path(tmp.name)
+    tmp_path.replace(path)
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Storia listings + bounded Jev apartment clues")
     parser.add_argument("--transaction", choices=["rent", "sale"], default="rent")
+    parser.add_argument("--location", "--city", choices=sorted(LOCATIONS), default="romania", help="Storia search area")
     parser.add_argument("--pages", type=int, default=1)
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--delay", type=float, default=3.0, help="minimum seconds between Storia requests (floor: 2)")
     parser.add_argument("--fixture", type=Path, help="offline __NEXT_DATA__ search JSON fixture")
     parser.add_argument("--detail-fixture", type=Path, help="offline __NEXT_DATA__ detail JSON fixture")
     parser.add_argument("--no-jev", action="store_true", help="normalize only; spend no API credits")
+    parser.add_argument("--refresh", action="store_true", help="refetch and reclassify previously processed listings")
+    parser.add_argument("--archive-raw", action="store_true", help="save full local Storia JSON under out/raw for parser research")
+    parser.add_argument("--render-only", action="store_true", help="rebuild HTML from existing JSONL without scraping or Jev")
+    parser.add_argument("--import-jsonl", type=Path, help="merge an existing saved JSONL and rebuild HTML without network")
     parser.add_argument("--model", default="jev-latest")
     parser.add_argument("--output", type=Path, default=Path("out"))
     args = parser.parse_args(argv)
@@ -25,20 +52,33 @@ def main(argv=None):
         parser.error("pages must be 1–3 and limit 1–30")
     if args.detail_fixture and not args.fixture:
         parser.error("--detail-fixture requires --fixture")
+    if args.import_jsonl and not args.import_jsonl.is_file():
+        parser.error(f"Import file does not exist: {args.import_jsonl}")
     key = os.environ.get("JEV_API_KEY")
-    if not args.no_jev and not key:
+    if not args.no_jev and not args.render_only and not args.import_jsonl and not key:
         parser.error("JEV_API_KEY is missing; export it or use --no-jev")
     try:
+        args.output.mkdir(parents=True, exist_ok=True)
+        output_file = args.output / "listings.jsonl"
+        records = _read_records(output_file)
+        if args.import_jsonl:
+            records.update(_read_records(args.import_jsonl))
+        if args.render_only or args.import_jsonl:
+            _save_records(output_file, records)
+            (args.output / "index.html").write_text(render(list(records.values())))
+            print(f"Rendered {len(records)} saved listings in {args.output.resolve()}")
+            return 0
+        skip_ids = {key[1] for key, record in records.items() if key[0] == args.transaction and record["listing"].get("detail_found") and
+                    (args.no_jev or record.get("jev"))} if not args.refresh else set()
         if args.fixture:
             detail = detail_ad(json.loads(args.detail_fixture.read_text())) if args.detail_fixture else None
-            items = (normalize(s, detail if detail and str(s["id"]) == str(detail.get("id")) else None, args.transaction)
-                     for s in summaries(json.loads(args.fixture.read_text())))
+            items = (normalize(s, detail if detail and str(s["id"]) == str(detail.get("id")) else None, args.transaction, args.location)
+                     for s in summaries(json.loads(args.fixture.read_text())) if str(s["id"]) not in skip_ids)
         else:
-            items = Collector(args.delay).collect(args.transaction, args.pages, args.limit)
-        args.output.mkdir(parents=True, exist_ok=True)
-        records = []
+            items = Collector(args.delay, args.output / "raw" if args.archive_raw else None).collect(args.transaction, args.pages, args.limit, args.location, skip_ids)
+        new_count = 0
         for listing in items:
-            if len(records) >= args.limit:
+            if new_count >= args.limit:
                 break
             record = {"listing": listing, "jev": None}
             if not args.no_jev:
@@ -46,11 +86,12 @@ def main(argv=None):
                     record["jev"] = evaluate(listing, key, args.model)
                 except (RuntimeError, ValueError) as exc:
                     record["jev_error"] = str(exc)
-            records.append(record)
-            print(f"[{len(records)}] {listing['title']} — {'classified' if record['jev'] else 'unclassified'}")
-        (args.output / "listings.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in records))
-        (args.output / "index.html").write_text(render(records))
-        print(f"Wrote {len(records)} listings to {args.output.resolve()}")
+            records[(listing["transaction"], listing["id"])] = record
+            new_count += 1
+            print(f"[{new_count}] {listing['title']} — {'classified' if record['jev'] else 'unclassified'}")
+        _save_records(output_file, records)
+        (args.output / "index.html").write_text(render(list(records.values())))
+        print(f"Processed {new_count} new listings; {len(records)} total in {args.output.resolve()}")
         return 0
     except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
         print(f"catzoom: {exc}", file=sys.stderr)
