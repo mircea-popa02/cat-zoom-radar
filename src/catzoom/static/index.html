@@ -1,7 +1,80 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Cat & Zoom Radar</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head><body>
-<header><div class="shell"><p class="kicker">STORIA × JEV · LOCAL WORKBENCH</p><h1>Find your kind of place.</h1><p class="intro">Build your own listing classifiers, tune what matters, and evaluate only the listings you choose. Jev runs on the local server; your API key never enters this page.</p></div></header>
-<main class="shell"><section class="toolbar" aria-label="Listing controls"><div class="controls"><input id="search" type="search" placeholder="Search title, city, description" aria-label="Search listings"><select id="sort" aria-label="Sort listings"><option value="newest">Newest first</option><option value="score">Highest score</option></select><button id="settings" type="button">⚙ Classifiers & weights</button></div><div class="controls"><label class="toggle"><input id="auto" type="checkbox"> Classify as I open pages</label><button id="classify" type="button">Classify this page</button></div></section>
-<p id="notice" role="status" aria-live="polite"></p><div class="summary"><span id="count"></span><span id="pool"></span></div><section id="grid" class="grid" aria-label="Listings"></section><nav class="pager" aria-label="Listing pages"><button id="prev" type="button">← Previous</button><span id="page"></span><button id="next" type="button">Next →</button></nav></main>
-<dialog id="editor"><form method="dialog"><div class="dialog-head"><div><p class="kicker">YOUR DECISION RUBRIC</p><h2>Classifiers & weights</h2></div><button aria-label="Close" type="submit">✕</button></div></form><p>Weights change the score immediately. Choice options can add or subtract points; rubric levels run from low to high. Uncertain and missing answers earn none.</p><div id="rules"></div><button id="restore" type="button">Restore missing presets</button><hr><h3>Add a classifier</h3><div class="form-grid"><label>Name <input id="newName" maxlength="48" placeholder="e.g. Walkable errands"></label><label>Weight (0–5) <input id="newWeight" type="number" min="0" max="5" step="0.5" value="2"></label><label class="wide">Question for Jev <textarea id="newQuestion" maxlength="300" rows="3" placeholder="Does the listing explicitly mention shops within walking distance?"></textarea><small>12–300 characters. Ask about evidence in the listing, not facts it cannot know.</small></label><label>Question type <select id="newKind"><option value="noul">Yes / no</option><option value="choice">Multiple choice</option><option value="score">Rubric score</option></select></label><label id="preferredWrap">Good answer <select id="newPreferred"><option value="yes">Yes</option><option value="no">No</option></select></label><label class="wide" id="optionsWrap" hidden>Options: one per line <textarea id="newOptions" rows="5" placeholder="walkable | Shops within walking distance explicitly stated | 1&#10;unclear | No clear evidence | 0&#10;remote | Explicitly car dependent | -1"></textarea><small>2–5 lines: lowercase_key | meaning (max 160 characters) | score from -2 to 1.</small></label><label class="wide" id="levelsWrap" hidden>Rubric levels: low to high <textarea id="newLevels" rows="5" placeholder="No evidence of natural light&#10;Some natural light mentioned&#10;Explicitly bright and sunny"></textarea><small>2–5 lines, one ordered level per line. Higher levels earn more weighted points.</small></label></div><div class="dialog-actions"><button id="addRule" type="button">Add classifier</button><span id="editorNotice" role="status"></span></div><p class="small">At most 12 active classifiers. Only the current page (up to 9 listings) is sent for classification when requested.</p></dialog>
-<footer>Advertiser claims and Jev decisions need human verification. This workbench binds to 127.0.0.1 only.</footer>
-</body></html>
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Cat & Zoom Radar</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="/app.js" defer></script>
+</head>
+
+<body>
+    <header>
+        <div class="shell">
+            <p class="kicker">STORIA × JEV · LOCAL WORKBENCH</p>
+            <h1>Find your kind of place.</h1>
+            <p class="intro">Build your own listing classifiers, tune what matters, and evaluate only the listings you
+                choose. Jev runs on the local server; your API key never enters this page.</p>
+        </div>
+    </header>
+    <main class="shell">
+        <section class="toolbar" aria-label="Listing controls">
+            <div class="controls"><input id="search" type="search" placeholder="Search title, city, description"
+                    aria-label="Search listings"><select id="sort" aria-label="Sort listings">
+                    <option value="newest">Newest first</option>
+                    <option value="score">Highest score</option>
+                </select><button id="settings" type="button">⚙ Classifiers & weights</button></div>
+            <div class="controls"><label class="toggle"><input id="auto" type="checkbox"> Classify as I open
+                    pages</label><button id="classify" type="button">Classify this page</button></div>
+        </section>
+        <p id="notice" role="status" aria-live="polite"></p>
+        <div class="summary"><span id="count"></span><span id="pool"></span></div>
+        <section id="grid" class="grid" aria-label="Listings"></section>
+        <nav class="pager" aria-label="Listing pages"><button id="prev" type="button">← Previous</button><span
+                id="page"></span><button id="next" type="button">Next →</button></nav>
+    </main>
+    <dialog id="editor">
+        <form method="dialog">
+            <div class="dialog-head">
+                <div>
+                    <p class="kicker">YOUR DECISION RUBRIC</p>
+                    <h2>Classifiers & weights</h2>
+                </div><button aria-label="Close" type="submit">✕</button>
+            </div>
+        </form>
+        <p>Weights change the score immediately. Choice options can add or subtract points; rubric levels run from low
+            to high. Uncertain and missing answers earn none.</p>
+        <div id="rules"></div><button id="restore" type="button">Restore missing presets</button>
+        <hr>
+        <h3>Add a classifier</h3>
+        <div class="form-grid"><label>Name <input id="newName" maxlength="48"
+                    placeholder="e.g. Walkable errands"></label><label>Weight (0–5) <input id="newWeight" type="number"
+                    min="0" max="5" step="0.5" value="2"></label><label class="wide">Question for Jev <textarea
+                    id="newQuestion" maxlength="300" rows="3"
+                    placeholder="Does the listing explicitly mention shops within walking distance?"></textarea><small>12–300
+                    characters. Ask about evidence in the listing, not facts it cannot
+                    know.</small></label><label>Question type <select id="newKind">
+                    <option value="noul">Yes / no</option>
+                    <option value="choice">Multiple choice</option>
+                    <option value="score">Rubric score</option>
+                </select></label><label id="preferredWrap">Good answer <select id="newPreferred">
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                </select></label><label class="wide" id="optionsWrap" hidden>Options: one per line <textarea
+                    id="newOptions" rows="5"
+                    placeholder="walkable | Shops within walking distance explicitly stated | 1&#10;unclear | No clear evidence | 0&#10;remote | Explicitly car dependent | -1"></textarea><small>2–5
+                    lines: lowercase_key | meaning (max 160 characters) | score from -2 to 1.</small></label><label
+                class="wide" id="levelsWrap" hidden>Rubric levels: low to high <textarea id="newLevels" rows="5"
+                    placeholder="No evidence of natural light&#10;Some natural light mentioned&#10;Explicitly bright and sunny"></textarea><small>2–5
+                    lines, one ordered level per line. Higher levels earn more weighted points.</small></label></div>
+        <div class="dialog-actions"><button id="addRule" type="button">Add classifier</button><span id="editorNotice"
+                role="status"></span></div>
+        <p class="small">At most 12 active classifiers. Only the current page (up to 9 listings) is sent for
+            classification when requested.</p>
+    </dialog>
+    <footer>Advertiser claims and Jev decisions need human verification. This workbench binds to 127.0.0.1 only.
+    </footer>
+</body>
+
+</html>
