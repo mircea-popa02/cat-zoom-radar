@@ -6,3 +6,5 @@ out/
 .env
 *.jsonl
 *.egg-info/
+build/
+dist/

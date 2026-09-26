@@ -32,6 +32,11 @@ def _save_records(path, records):
 
 
 def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "serve":
+        from .server import serve_main
+        return serve_main(argv[1:])
     parser = argparse.ArgumentParser(description="Storia listings + bounded Jev apartment clues")
     parser.add_argument("--transaction", choices=["rent", "sale"], default="rent")
     parser.add_argument("--location", "--city", choices=sorted(LOCATIONS), default="romania", help="Storia search area")
@@ -40,7 +45,8 @@ def main(argv=None):
     parser.add_argument("--delay", type=float, default=3.0, help="minimum seconds between Storia requests (floor: 2)")
     parser.add_argument("--fixture", type=Path, help="offline __NEXT_DATA__ search JSON fixture")
     parser.add_argument("--detail-fixture", type=Path, help="offline __NEXT_DATA__ detail JSON fixture")
-    parser.add_argument("--no-jev", action="store_true", help="normalize only; spend no API credits")
+    parser.add_argument("--no-jev", action="store_true", help="compatibility alias; normalization is the default")
+    parser.add_argument("--classify-on-crawl", action="store_true", help="legacy mode: evaluate all new listings during crawling")
     parser.add_argument("--refresh", action="store_true", help="refetch and reclassify previously processed listings")
     parser.add_argument("--archive-raw", action="store_true", help="save full local Storia JSON under out/raw for parser research")
     parser.add_argument("--render-only", action="store_true", help="rebuild HTML from existing JSONL without scraping or Jev")
@@ -52,11 +58,13 @@ def main(argv=None):
         parser.error("pages must be 1–3 and limit 1–30")
     if args.detail_fixture and not args.fixture:
         parser.error("--detail-fixture requires --fixture")
+    if args.no_jev and args.classify_on_crawl:
+        parser.error("Choose either --no-jev or --classify-on-crawl")
     if args.import_jsonl and not args.import_jsonl.is_file():
         parser.error(f"Import file does not exist: {args.import_jsonl}")
     key = os.environ.get("JEV_API_KEY")
-    if not args.no_jev and not args.render_only and not args.import_jsonl and not key:
-        parser.error("JEV_API_KEY is missing; export it or use --no-jev")
+    if args.classify_on_crawl and not key:
+        parser.error("JEV_API_KEY is missing; export it or omit --classify-on-crawl")
     try:
         args.output.mkdir(parents=True, exist_ok=True)
         output_file = args.output / "listings.jsonl"
@@ -69,7 +77,7 @@ def main(argv=None):
             print(f"Rendered {len(records)} saved listings in {args.output.resolve()}")
             return 0
         skip_ids = {key[1] for key, record in records.items() if key[0] == args.transaction and record["listing"].get("detail_found") and
-                    (args.no_jev or record.get("jev"))} if not args.refresh else set()
+                    (not args.classify_on_crawl or record.get("jev"))} if not args.refresh else set()
         if args.fixture:
             detail = detail_ad(json.loads(args.detail_fixture.read_text())) if args.detail_fixture else None
             items = (normalize(s, detail if detail and str(s["id"]) == str(detail.get("id")) else None, args.transaction, args.location)
@@ -81,7 +89,7 @@ def main(argv=None):
             if new_count >= args.limit:
                 break
             record = {"listing": listing, "jev": None}
-            if not args.no_jev:
+            if args.classify_on_crawl:
                 try:
                     record["jev"] = evaluate(listing, key, args.model)
                 except (RuntimeError, ValueError) as exc:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cat-zoom-radar"
-version = "0.2.0"
+version = "0.3.0"
 description = "A tiny Storia apartment scout with Jev decisions for cats and video calls"
 requires-python = ">=3.10"
 
@@ -13,3 +13,6 @@ catzoom = "catzoom.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+catzoom = ["static/*.html", "static/*.css", "static/*.js"]

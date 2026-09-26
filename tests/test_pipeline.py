@@ -96,6 +96,8 @@ class PipelineTests(unittest.TestCase):
             self.assertIn("class=\"grid\"", page)
             self.assertIn("cdn.example.test/room.jpg", page)
             self.assertIn("id=\"next\"", page)
+            with patch.dict("os.environ", {"JEV_API_KEY": ""}):
+                self.assertEqual(main(["--fixture", str(ROOT / "fixtures/search.json"), "--detail-fixture", str(ROOT / "fixtures/detail.json"), "--refresh", "--output", tmp]), 0)
 
 
 if __name__ == "__main__":

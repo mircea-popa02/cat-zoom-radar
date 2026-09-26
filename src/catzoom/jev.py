@@ -21,19 +21,20 @@ QUESTIONS = {
 }
 
 
-def payload(listing, model="jev-latest"):
+def payload(listing, model="jev-latest", questions=None):
     # No seller contact data, images, exact street or coordinates leave the machine.
     state = {k: listing.get(k) for k in ("title", "description", "features", "amenities", "building", "floor", "rooms", "area_sqm", "transaction", "price")}
     state["description"] = (state.get("description") or "")[:12000]
-    return {"model": model, "state": state, "questions": QUESTIONS}
+    return {"model": model, "state": state, "questions": questions if questions is not None else QUESTIONS}
 
 
-def parse_answer(data):
+def parse_answer(data, questions=None):
+    questions = questions if questions is not None else QUESTIONS
     answers = data.get("answers")
     if not isinstance(answers, dict):
         raise ValueError("Jev response has no answers map")
     result = {}
-    for key, question in QUESTIONS.items():
+    for key, question in questions.items():
         answer = answers.get(key)
         if not isinstance(answer, dict) or answer.get("type") != question["type"]:
             raise ValueError(f"Jev response missing {key} answer")
@@ -46,6 +47,13 @@ def parse_answer(data):
             if not isinstance(probability, (int, float)) or not math.isfinite(probability) or not 0 <= probability <= 1:
                 raise ValueError(f"Invalid Jev probability for {key}")
             result[key] = {"value": choice if probability >= 0.72 else "review", "candidate": choice, "probability": probability}
+        elif question["type"] == "score":
+            value, confidence = answer.get("score"), answer.get("confidence")
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= len(question["criteria"]) - 1:
+                raise ValueError(f"Invalid Jev score for {key}")
+            if not isinstance(confidence, (int, float)) or not math.isfinite(confidence) or not 0 <= confidence <= 1:
+                raise ValueError(f"Invalid Jev confidence for {key}")
+            result[key] = {"value": round(value, 3) if confidence >= .72 else "review", "candidate": round(value, 3), "probability": confidence}
         else:
             value = answer.get("noul")
             if not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1:
@@ -54,8 +62,10 @@ def parse_answer(data):
     return {"model": data.get("model"), "signals": result, "usage": data.get("usage")}
 
 
-def evaluate(listing, api_key, model="jev-latest"):
-    body = json.dumps(payload(listing, model), ensure_ascii=False).encode("utf-8")
+def evaluate_questions(listing, api_key, questions, model="jev-latest"):
+    if not questions:
+        raise ValueError("At least one Jev question is required")
+    body = json.dumps(payload(listing, model, questions), ensure_ascii=False).encode("utf-8")
     req = Request(ENDPOINT, data=body, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}, method="POST")
     try:
         with urlopen(req, timeout=30) as response:
@@ -64,4 +74,8 @@ def evaluate(listing, api_key, model="jev-latest"):
         raise RuntimeError(f"Jev HTTP {exc.code}; check key, quota, or request schema") from exc
     except (URLError, TimeoutError) as exc:
         raise RuntimeError(f"Jev request failed: {exc}") from exc
-    return parse_answer(data)
+    return parse_answer(data, questions)
+
+
+def evaluate(listing, api_key, model="jev-latest"):
+    return evaluate_questions(listing, api_key, QUESTIONS, model)
