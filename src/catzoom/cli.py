@@ -54,8 +54,6 @@ def main(argv=None):
     parser.add_argument("--model", default="jev-latest")
     parser.add_argument("--output", type=Path, default=Path("out"))
     args = parser.parse_args(argv)
-    if not 1 <= args.pages <= 3 or not 1 <= args.limit <= 30:
-        parser.error("pages must be 1–3 and limit 1–30")
     if args.detail_fixture and not args.fixture:
         parser.error("--detail-fixture requires --fixture")
     if args.no_jev and args.classify_on_crawl:
