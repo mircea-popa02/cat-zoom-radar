@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: cat-zoom-radar
+Version: 0.1.0
+Summary: A tiny Storia apartment scout with Jev decisions for cats and video calls
+Requires-Python: >=3.10
+License-File: LICENSE
+Dynamic: license-file
